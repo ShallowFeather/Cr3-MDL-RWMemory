@@ -2,22 +2,18 @@
 #include <windef.h>
 #include <intrin.h>
 
-/* ���Ը������� */
 #define printfs(x, ...) DbgPrintEx(0, 0, x, __VA_ARGS__)
 
-/* ��ȡ�ڴ� */
 #define Mdl_Read CTL_CODE(FILE_DEVICE_UNKNOWN,0x800,METHOD_BUFFERED,FILE_ALL_ACCESS)
 
-/* д���ڴ� */
 #define Mdl_Write CTL_CODE(FILE_DEVICE_UNKNOWN,0x801,METHOD_BUFFERED,FILE_ALL_ACCESS)
 
-/* ������Ϣ�Ľṹ */
 typedef struct _UserData
 {
-	DWORD Pid;							//Ҫ��д�Ľ���ID
-	DWORD64 Address;				//Ҫ��д�ĵ�ַ
-	DWORD Size;							//��д����
-	PBYTE Data;								//Ҫ��д������
+	DWORD Pid;	
+	DWORD64 Address;
+	DWORD Size;
+	PBYTE Data;	
 }UserData, * PUserData;
 
 #define DIRECTORY_TABLE_BASE 0x028
@@ -26,7 +22,6 @@ typedef struct _UserData
 NTKERNELAPI NTSTATUS PsLookupProcessByProcessId(HANDLE ProcessId, PEPROCESS
 	* Process);
 NTKERNELAPI CHAR* PsGetProcessImageFileName(PEPROCESS Process);
-// 关闭写保护
 KIRQL Open()
 {
 	KIRQL irql = KeRaiseIrqlToDpcLevel();
@@ -36,7 +31,6 @@ KIRQL Open()
 	_disable();
 	return irql;
 }
-// 开启写保护
 void Close(KIRQL irql)
 {
 	UINT64 cr0 = __readcr0();
@@ -45,7 +39,6 @@ void Close(KIRQL irql)
 	__writecr0(cr0);
 	KeLowerIrql(irql);
 }
-// 检查内存
 ULONG64 CheckAddressVal(PVOID p)
 {
 	if (MmIsAddressValid(p) == FALSE)
@@ -74,14 +67,11 @@ VOID Deattach(IN ULONG64 OldCr3) {
 
 }
 
-// {F90B1129-715C-4F84-A069-FEE12E2AFB48}
 UNICODE_STRING DeviceName = RTL_CONSTANT_STRING(L"\\Device\\SFeather");
 UNICODE_STRING DeviceLink = RTL_CONSTANT_STRING(L"\\??\\SFeather");
 
-//��ȡ�ڴ�
 VOID MdlReadProcessMemory(PUserData Buffer)
 {
-	//��Ŀ�����
 	PEPROCESS Process = NULL;
 	NTSTATUS Status = PsLookupProcessByProcessId((HANDLE)Buffer->Pid, &Process);
 	if (!NT_SUCCESS(Status))
@@ -90,7 +80,6 @@ VOID MdlReadProcessMemory(PUserData Buffer)
 		return;
 	}
 
-	//�����ڴ�ռ�
 	PBYTE Temp = ExAllocatePool(PagedPool, Buffer->Size);
 	if (Temp == NULL)
 	{
@@ -99,32 +88,23 @@ VOID MdlReadProcessMemory(PUserData Buffer)
 		return;
 	}
 
-	//���ӽ���
 	ULONG64 OldCr3 = Attach(Process);
 
-	//�����ڴ�
 	ProbeForRead((PVOID)Buffer->Address, Buffer->Size, 1);
 
-	//�����ڴ�
 	RtlCopyMemory(Temp, (PVOID)Buffer->Address, Buffer->Size);
 
-	//�������
 	ObDereferenceObject(Process);
 
-	//��������
 	Deattach(OldCr3);
 
-	//���Ƶ����ǵĻ�����
 	RtlCopyMemory(Buffer->Data, Temp, Buffer->Size);
 
-	//�ͷ��ڴ�
 	ExFreePool(Temp);
 }
 
-//д���ڴ�
 VOID MdlWriteProcessMemory(PUserData Buffer)
 {
-	//��Ŀ�����
 	PEPROCESS Process = NULL;
 	NTSTATUS Status = PsLookupProcessByProcessId((HANDLE)Buffer->Pid, &Process);
 	if (!NT_SUCCESS(Status))
@@ -133,7 +113,6 @@ VOID MdlWriteProcessMemory(PUserData Buffer)
 		return;
 	}
 
-	//�����ڴ�ռ�
 	PBYTE Temp = ExAllocatePool(PagedPool, Buffer->Size);
 	if (Temp == NULL)
 	{
@@ -142,13 +121,10 @@ VOID MdlWriteProcessMemory(PUserData Buffer)
 		return;
 	}
 
-	//�����ڴ�����
 	for (DWORD i = 0; i < Buffer->Size; i++) Temp[i] = Buffer->Data[i];
 
-	//���ӽ���
 	ULONG64 OldCr3 = Attach(Process);
 
-	//����MDL
 	PMDL Mdl = IoAllocateMdl((PVOID)Buffer->Address, Buffer->Size, FALSE, FALSE, NULL);
 	if (Mdl == NULL)
 	{
@@ -158,55 +134,44 @@ VOID MdlWriteProcessMemory(PUserData Buffer)
 		return;
 	}
 
-	//��������ҳ��
 	MmBuildMdlForNonPagedPool(Mdl);
 
-	//����ҳ��
 	PBYTE ChangeData = MmMapLockedPages(Mdl, KernelMode);
 
-	//�����ڴ�
 	if (ChangeData) RtlCopyMemory(ChangeData, Temp, Buffer->Size);
 
-	//�ͷ�����
 	IoFreeMdl(Mdl);
 	ExFreePool(Temp);
 	Deattach(OldCr3);
 	ObDereferenceObject(Process);
 }
 
-//������ǲ����
 NTSTATUS DriverIoctl(PDEVICE_OBJECT Device, PIRP pirp)
 {
-	//δ����
 	UNREFERENCED_PARAMETER(Device);
 
-	//��ȡ��ջ
 	PIO_STACK_LOCATION Stack = IoGetCurrentIrpStackLocation(pirp);
 
-	//��ȡ������
 	ULONG Code = Stack->Parameters.DeviceIoControl.IoControlCode;
 
 	if (Stack->MajorFunction == IRP_MJ_DEVICE_CONTROL)
 	{
-		//��ȡ����ָ��
 		PUserData Buffer = pirp->AssociatedIrp.SystemBuffer;
 		printfs("[Mdl] : PID:%d  Addr ַ:%x  Size:%d", Buffer->Pid, Buffer->Address, Buffer->Size);
 
-		if (Code == Mdl_Read) MdlReadProcessMemory(Buffer); //��ȡ�ڴ�
-		if (Code == Mdl_Write) MdlWriteProcessMemory(Buffer);//д���ڴ�
+		if (Code == Mdl_Read) MdlReadProcessMemory(Buffer);
+		if (Code == Mdl_Write) MdlWriteProcessMemory(Buffer);
 
 		pirp->IoStatus.Information = sizeof(UserData);
 	}
 	else pirp->IoStatus.Information = 0;
 
-	//���IO
 	pirp->IoStatus.Status = STATUS_SUCCESS;
 	IoCompleteRequest(pirp, IO_NO_INCREMENT);
 
 	return STATUS_SUCCESS;
 }
 
-//����ж�غ���
 VOID DriverUnload(PDRIVER_OBJECT object)
 {
 	if (object->DeviceObject)
@@ -217,15 +182,12 @@ VOID DriverUnload(PDRIVER_OBJECT object)
 	printfs("[Mdl] : Unload");
 }
 
-//������ں���
 NTSTATUS DriverEntry(PDRIVER_OBJECT object, PUNICODE_STRING reg)
 {
 	printfs("[Mdl] : LOAD -> %wZ", reg);
 
-	//����ж�غ���
 	object->DriverUnload = DriverUnload;
 
-	//�����豸
 	PDEVICE_OBJECT Device = NULL;
 	NTSTATUS Status = IoCreateDevice(object, sizeof(object->DriverExtension), &DeviceName, FILE_DEVICE_UNKNOWN, FILE_DEVICE_SECURE_OPEN, FALSE, &Device);
 	if (!NT_SUCCESS(Status))
@@ -234,7 +196,6 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT object, PUNICODE_STRING reg)
 		return Status;
 	}
 
-	//��������
 	Status = IoCreateSymbolicLink(&DeviceLink, &DeviceName);
 	if (!NT_SUCCESS(Status))
 	{
@@ -243,7 +204,6 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT object, PUNICODE_STRING reg)
 		return Status;
 	}
 
-	//������ǲ����
 	object->MajorFunction[IRP_MJ_CREATE] = DriverIoctl;
 	object->MajorFunction[IRP_MJ_CLOSE] = DriverIoctl;
 	object->MajorFunction[IRP_MJ_DEVICE_CONTROL] = DriverIoctl;
