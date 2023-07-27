@@ -1,4 +1,4 @@
-﻿#include <ntifs.h>
+#include <ntifs.h>
 #include <windef.h>
 #include <intrin.h>
 #include "global.h"
@@ -10,6 +10,7 @@ NTKERNELAPI NTSTATUS IoCreateDriver(PUNICODE_STRING DriverName, PDRIVER_INITIALI
 #define init_code CTL_CODE(FILE_DEVICE_UNKNOWN, 0x775, METHOD_BUFFERED, FILE_SPECIAL_ACCESS)
 #define read_code CTL_CODE(FILE_DEVICE_UNKNOWN, 0x776, METHOD_BUFFERED, FILE_SPECIAL_ACCESS)
 #define write_code CTL_CODE(FILE_DEVICE_UNKNOWN, 0x777, METHOD_BUFFERED, FILE_SPECIAL_ACCESS)
+#define base_code CTL_CODE(FILE_DEVICE_UNKNOWN, 0x778, METHOD_BUFFERED, FILE_SPECIAL_ACCESS)
 
 typedef struct info_t {
 	HANDLE target_pid;
@@ -17,6 +18,7 @@ typedef struct info_t {
 	PBYTE buffer_address;
 	SIZE_T Size;
 	SIZE_T return_size;
+	void* base;
 } UserData, * PUserData;
 
 KIRQL Open()
@@ -62,6 +64,10 @@ VOID DeAttach(IN ULONG64 OldCr3) {
 	__writecr3(OldCr3);
 	_enable();
 
+}
+
+ULONG64 get_module_base_x64(PEPROCESS proc) {
+	return (ULONG64)PsGetProcessSectionBaseAddress(proc);
 }
 
 NTSTATUS ctl_io(PDEVICE_OBJECT device_obj, PIRP irp) {
@@ -136,6 +142,11 @@ NTSTATUS ctl_io(PDEVICE_OBJECT device_obj, PIRP irp) {
 				ExFreePool(Temp);
 				DeAttach(OldCr3);
 			}
+			else if (ctl_code == base_code) {
+				PEPROCESS process = NULL;
+				NTSTATUS Status = PsLookupProcessByProcessId((HANDLE)Buffer->target_pid, &process);
+				Buffer->base = (PVOID)get_module_base_x64(process);
+			}
 			irp->IoStatus.Information = sizeof(UserData);
 
 		}
@@ -173,11 +184,11 @@ NTSTATUS real_main(PDRIVER_OBJECT driver_obj, PUNICODE_STRING registery_path) {
 	UNICODE_STRING dev_name, sym_link;
 	PDEVICE_OBJECT dev_obj;
 
-	RtlInitUnicodeString(&dev_name, L"\\Device\\SFeather");
+	RtlInitUnicodeString(&dev_name, L"\\Device\\cartidriver");
 	auto status = IoCreateDevice(driver_obj, 0, &dev_name, FILE_DEVICE_UNKNOWN, FILE_DEVICE_SECURE_OPEN, FALSE, &dev_obj);
 	if (status != STATUS_SUCCESS) return status;
 
-	RtlInitUnicodeString(&sym_link, L"\\DosDevices\\SFeather");
+	RtlInitUnicodeString(&sym_link, L"\\DosDevices\\cartidriver");
 	status = IoCreateSymbolicLink(&sym_link, &dev_name);
 	if (status != STATUS_SUCCESS) return status;
 
@@ -200,7 +211,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT driver_obj, PUNICODE_STRING registery_path) 
 	UNREFERENCED_PARAMETER(registery_path);
 
 	UNICODE_STRING  drv_name;
-	RtlInitUnicodeString(&drv_name, L"\\Driver\\SFeather");
+	RtlInitUnicodeString(&drv_name, L"\\Driver\\cartidriver");
 	IoCreateDriver(&drv_name, &real_main);
 	DbgPrint("LOAD\n");
 	return STATUS_SUCCESS;
